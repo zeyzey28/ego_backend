@@ -25,18 +25,23 @@ from geo import (
 from auth import (
     UserRegister,
     UserLogin,
+    StaffLogin,
     StaffCreate,
+    StaffRole,
     Token,
     TokenData,
     UserResponse,
     StaffResponse,
     register_user,
     login_user,
+    login_staff,
     add_staff,
     get_current_user,
     get_current_staff,
+    get_current_yonetici,
     get_users,
     get_staff,
+    get_staff_roles,
 )
 
 # Initialize FastAPI app
@@ -182,13 +187,13 @@ class Complaint(BaseModel):
 
 
 # ============================================
-# AUTH ENDPOINTS
+# AUTH ENDPOINTS - KULLANICI (Vatandaş)
 # ============================================
 
-@app.post("/auth/register", response_model=Token)
-async def register(user_data: UserRegister):
+@app.post("/auth/user/register", response_model=Token)
+async def register_user_endpoint(user_data: UserRegister):
     """
-    Yeni kullanıcı kaydı.
+    Yeni vatandaş kullanıcı kaydı.
     Kayıt başarılı olursa otomatik olarak giriş yapılır ve token döner.
     
     - **username**: Kullanıcı adı (benzersiz olmalı)
@@ -203,19 +208,37 @@ async def register(user_data: UserRegister):
     return login_user(login_data)
 
 
-@app.post("/auth/login", response_model=Token)
-async def login(login_data: UserLogin):
+@app.post("/auth/user/login", response_model=Token)
+async def login_user_endpoint(login_data: UserLogin):
     """
-    Kullanıcı veya personel girişi.
+    Vatandaş kullanıcı girişi.
     
-    Dönen token'daki **role** alanına göre yönlendirme yapılmalı:
-    - role: "user" → Kullanıcı Paneli
-    - role: "staff" → Belediye Paneli
+    Başarılı girişte:
+    - role: "user" → Kullanıcı Paneline yönlendir
     
     - **username**: Kullanıcı adı
     - **password**: Şifre
     """
     return login_user(login_data)
+
+
+# ============================================
+# AUTH ENDPOINTS - BELEDİYE PERSONELİ
+# ============================================
+
+@app.post("/auth/staff/login", response_model=Token)
+async def login_staff_endpoint(login_data: StaffLogin):
+    """
+    Belediye personeli girişi.
+    
+    Başarılı girişte:
+    - role: "staff" → Belediye Paneline yönlendir
+    - staff_role: "yonetici" | "operasyon" | "analiz"
+    
+    - **username**: Kullanıcı adı
+    - **password**: Şifre
+    """
+    return login_staff(login_data)
 
 
 @app.get("/auth/me")
@@ -233,6 +256,7 @@ async def get_me(current_user: TokenData = Depends(get_current_user)):
                     "username": member["username"],
                     "full_name": member.get("full_name"),
                     "department": member.get("department"),
+                    "staff_role": member.get("staff_role"),
                     "role": "staff"
                 }
     else:
@@ -254,19 +278,29 @@ async def get_me(current_user: TokenData = Depends(get_current_user)):
 # STAFF MANAGEMENT ENDPOINTS (Belediye Paneli)
 # ============================================
 
+@app.get("/staff/roles")
+async def get_available_roles():
+    """
+    Mevcut personel rollerini listele.
+    Personel oluştururken kullanılacak roller.
+    """
+    return get_staff_roles()
+
+
 @app.post("/staff/add", response_model=StaffResponse)
 async def create_staff(
     staff_data: StaffCreate,
-    current_user: TokenData = Depends(get_current_staff)
+    current_user: TokenData = Depends(get_current_yonetici)
 ):
     """
     Yeni belediye personeli ekle.
-    Sadece mevcut belediye personeli bu işlemi yapabilir.
+    **Sadece yönetici rolündeki personel bu işlemi yapabilir.**
     
     - **username**: Kullanıcı adı (benzersiz olmalı)
     - **password**: Şifre
     - **full_name**: Ad Soyad
     - **department**: Departman (opsiyonel)
+    - **staff_role**: Rol (yonetici, operasyon, analiz)
     """
     new_staff = add_staff(staff_data, current_user.username)
     return StaffResponse(
@@ -274,16 +308,17 @@ async def create_staff(
         username=new_staff["username"],
         full_name=new_staff["full_name"],
         department=new_staff.get("department"),
+        staff_role=new_staff.get("staff_role", "operasyon"),
         created_at=new_staff["created_at"],
         created_by=new_staff.get("created_by")
     )
 
 
 @app.get("/staff/list", response_model=list[StaffResponse])
-async def list_staff(current_user: TokenData = Depends(get_current_staff)):
+async def list_staff(current_user: TokenData = Depends(get_current_yonetici)):
     """
     Tüm belediye personelini listele.
-    Sadece belediye personeli görebilir.
+    **Sadece yönetici rolündeki personel görebilir.**
     """
     staff_list = get_staff()
     return [
@@ -292,6 +327,7 @@ async def list_staff(current_user: TokenData = Depends(get_current_staff)):
             username=s["username"],
             full_name=s["full_name"],
             department=s.get("department"),
+            staff_role=s.get("staff_role", "operasyon"),
             created_at=s["created_at"],
             created_by=s.get("created_by")
         )

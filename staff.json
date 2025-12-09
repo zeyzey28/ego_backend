@@ -1,20 +1,32 @@
 [
   {
     "id": 1,
-    "username": "admin",
-    "password_hash": "$2b$12$XIacNS4f1u1qo27Xt4aJ/Oj0um2XI1JI7UifhsQio9/DfjqAO0s02",
-    "full_name": "Sistem Yöneticisi",
+    "username": "belediye_admin",
+    "password_hash": "$2b$12$tZV02sm8z54y.DDzsN4mfeXZNsR51g6fcnr2NiW0.QgywIzkgOPyK",
+    "full_name": "Belediye Sistem Yöneticisi",
     "department": "IT",
-    "created_at": "2025-12-09T13:25:32.813676",
+    "staff_role": "yonetici",
+    "created_at": "2025-12-09T14:15:58.556919",
     "created_by": "system"
   },
   {
     "id": 2,
-    "username": "ahmet_personel",
-    "password_hash": "$2b$12$EIacI6euo98hwVHTezWwJ.wDsjxmZQdQUMMefQBTjESxwMl9Flc1S",
-    "full_name": "Ahmet Yılmaz",
-    "department": "Altyapı",
-    "created_at": "2025-12-09T13:25:48.473471",
-    "created_by": "admin"
+    "username": "mehmet_operasyon",
+    "password_hash": "$2b$12$nOrbZa7sEwPsyNQWXWYMFe1/aS78FNTqfKQkMm2.p2txsH19RWFHe",
+    "full_name": "Mehmet Yılmaz",
+    "department": "Saha Operasyonları",
+    "staff_role": "operasyon",
+    "created_at": "2025-12-09T14:18:08.882183",
+    "created_by": "belediye_admin"
+  },
+  {
+    "id": 3,
+    "username": "ayse_analiz",
+    "password_hash": "$2b$12$Xyf.bTLXqkO/bdTERwk0wurD4TJqxPKCaPJ0lnw4GOdL.dqh/T6tS",
+    "full_name": "Ayşe Kaya",
+    "department": "Veri Analizi",
+    "staff_role": "analiz",
+    "created_at": "2025-12-09T14:18:09.157684",
+    "created_by": "belediye_admin"
   }
 ]

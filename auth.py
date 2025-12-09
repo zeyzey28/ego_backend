@@ -1,9 +1,17 @@
 """
 Authentication module for User and Staff management
 JWT token based authentication with role-based access control
+
+Roller:
+- user: Normal vatandaş kullanıcı
+- staff: Belediye personeli
+  - yonetici: Tam yetki (personel ekleme dahil)
+  - operasyon: Şikayet yönetimi
+  - analiz: Sadece görüntüleme ve analiz
 """
 
 from datetime import datetime, timedelta
+from enum import Enum
 from pathlib import Path
 from typing import Optional
 
@@ -36,6 +44,16 @@ STAFF_PATH = DATA_DIR / "staff.json"
 
 
 # ============================================
+# Enums
+# ============================================
+
+class StaffRole(str, Enum):
+    YONETICI = "yonetici"
+    OPERASYON = "operasyon"
+    ANALIZ = "analiz"
+
+
+# ============================================
 # Models
 # ============================================
 
@@ -51,17 +69,25 @@ class UserLogin(BaseModel):
     password: str
 
 
+class StaffLogin(BaseModel):
+    """Belediye personeli girişi için ayrı model"""
+    username: str
+    password: str
+
+
 class StaffCreate(BaseModel):
     username: str
     password: str
     full_name: str
     department: Optional[str] = None
+    staff_role: StaffRole = StaffRole.OPERASYON  # Varsayılan rol
 
 
 class Token(BaseModel):
     access_token: str
     token_type: str
     role: str  # "user" veya "staff"
+    staff_role: Optional[str] = None  # "yonetici", "operasyon", "analiz"
     username: str
     full_name: Optional[str] = None
 
@@ -69,6 +95,7 @@ class Token(BaseModel):
 class TokenData(BaseModel):
     username: str
     role: str
+    staff_role: Optional[str] = None
 
 
 class UserResponse(BaseModel):
@@ -84,6 +111,7 @@ class StaffResponse(BaseModel):
     username: str
     full_name: str
     department: Optional[str] = None
+    staff_role: str
     created_at: str
     created_by: Optional[str] = None
 
@@ -95,7 +123,17 @@ class StaffResponse(BaseModel):
 def get_users() -> list:
     """Load users from file."""
     if not USERS_PATH.exists():
-        return []
+        # Varsayılan kullanıcı admin hesabı
+        default_users = [{
+            "id": 1,
+            "username": "kullanici_admin",
+            "password_hash": pwd_context.hash("kullanici123"),
+            "email": "admin@kullanici.com",
+            "full_name": "Kullanıcı Admin",
+            "created_at": datetime.now().isoformat()
+        }]
+        save_json(USERS_PATH, default_users)
+        return default_users
     return load_json(USERS_PATH)
 
 
@@ -107,13 +145,14 @@ def save_users(users: list):
 def get_staff() -> list:
     """Load staff from file."""
     if not STAFF_PATH.exists():
-        # Varsayılan admin kullanıcısı oluştur
+        # Varsayılan belediye admin kullanıcısı oluştur
         default_staff = [{
             "id": 1,
-            "username": "admin",
-            "password_hash": pwd_context.hash("admin123"),
-            "full_name": "Sistem Yöneticisi",
+            "username": "belediye_admin",
+            "password_hash": pwd_context.hash("belediye123"),
+            "full_name": "Belediye Sistem Yöneticisi",
             "department": "IT",
+            "staff_role": "yonetici",
             "created_at": datetime.now().isoformat(),
             "created_by": "system"
         }]
@@ -155,9 +194,10 @@ def decode_token(token: str) -> Optional[TokenData]:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         username: str = payload.get("sub")
         role: str = payload.get("role")
+        staff_role: str = payload.get("staff_role")
         if username is None or role is None:
             return None
-        return TokenData(username=username, role=role)
+        return TokenData(username=username, role=role, staff_role=staff_role)
     except JWTError:
         return None
 
@@ -235,6 +275,26 @@ async def get_current_staff(current_user: TokenData = Depends(get_current_user))
     return current_user
 
 
+async def get_current_yonetici(current_user: TokenData = Depends(get_current_staff)) -> TokenData:
+    """Verify that current user is a yonetici (manager)."""
+    if current_user.staff_role != "yonetici":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Bu işlem için yönetici yetkisi gerekiyor"
+        )
+    return current_user
+
+
+async def get_current_operasyon_or_yonetici(current_user: TokenData = Depends(get_current_staff)) -> TokenData:
+    """Verify that current user is operasyon or yonetici."""
+    if current_user.staff_role not in ["yonetici", "operasyon"]:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Bu işlem için operasyon veya yönetici yetkisi gerekiyor"
+        )
+    return current_user
+
+
 # ============================================
 # Registration and Login Functions
 # ============================================
@@ -278,31 +338,17 @@ def register_user(user_data: UserRegister) -> dict:
 
 
 def login_user(login_data: UserLogin) -> Token:
-    """Login user or staff and return token."""
-    # Try staff first
-    staff_member = authenticate_staff(login_data.username, login_data.password)
-    if staff_member:
-        access_token = create_access_token(
-            data={"sub": staff_member["username"], "role": "staff"}
-        )
-        return Token(
-            access_token=access_token,
-            token_type="bearer",
-            role="staff",
-            username=staff_member["username"],
-            full_name=staff_member.get("full_name")
-        )
-    
-    # Try regular user
+    """Login regular user only."""
     user = authenticate_user(login_data.username, login_data.password)
     if user:
         access_token = create_access_token(
-            data={"sub": user["username"], "role": "user"}
+            data={"sub": user["username"], "role": "user", "staff_role": None}
         )
         return Token(
             access_token=access_token,
             token_type="bearer",
             role="user",
+            staff_role=None,
             username=user["username"],
             full_name=user.get("full_name")
         )
@@ -314,8 +360,36 @@ def login_user(login_data: UserLogin) -> Token:
     )
 
 
+def login_staff(login_data: StaffLogin) -> Token:
+    """Login staff member only."""
+    staff_member = authenticate_staff(login_data.username, login_data.password)
+    if staff_member:
+        staff_role = staff_member.get("staff_role", "operasyon")
+        access_token = create_access_token(
+            data={
+                "sub": staff_member["username"], 
+                "role": "staff",
+                "staff_role": staff_role
+            }
+        )
+        return Token(
+            access_token=access_token,
+            token_type="bearer",
+            role="staff",
+            staff_role=staff_role,
+            username=staff_member["username"],
+            full_name=staff_member.get("full_name")
+        )
+    
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Kullanıcı adı veya şifre hatalı",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+
+
 def add_staff(staff_data: StaffCreate, created_by: str) -> dict:
-    """Add a new staff member (only by existing staff)."""
+    """Add a new staff member (only by yonetici)."""
     staff = get_staff()
     users = get_users()
     
@@ -343,6 +417,7 @@ def add_staff(staff_data: StaffCreate, created_by: str) -> dict:
         "password_hash": get_password_hash(staff_data.password),
         "full_name": staff_data.full_name,
         "department": staff_data.department,
+        "staff_role": staff_data.staff_role.value,
         "created_at": datetime.now().isoformat(),
         "created_by": created_by
     }
@@ -352,3 +427,11 @@ def add_staff(staff_data: StaffCreate, created_by: str) -> dict:
     
     return new_staff
 
+
+def get_staff_roles():
+    """Get available staff roles."""
+    return [
+        {"value": "yonetici", "label": "Yönetici", "description": "Tam yetki - personel ekleme dahil"},
+        {"value": "operasyon", "label": "Operasyon Ekibi", "description": "Şikayet yönetimi ve takibi"},
+        {"value": "analiz", "label": "Analiz Ekibi", "description": "Raporlama ve analiz görüntüleme"},
+    ]
