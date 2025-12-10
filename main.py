@@ -171,8 +171,25 @@ class NearestStopsResponse(BaseModel):
 
 
 class ComplaintResponse(BaseModel):
-    status: str
-    id: int
+    success: bool
+    message: str
+    complaint_id: int
+    category: str
+    urgency: str
+    created_at: str
+
+
+class AuthResponse(BaseModel):
+    success: bool
+    message: str
+    data: Optional[Token] = None
+
+
+class RegisterResponse(BaseModel):
+    success: bool
+    message: str
+    user_id: int
+    username: str
 
 
 class Complaint(BaseModel):
@@ -186,11 +203,20 @@ class Complaint(BaseModel):
     created_at: str
 
 
+class ComplaintCreate(BaseModel):
+    """JSON body ile şikayet oluşturma modeli"""
+    category: str
+    description: str
+    lat: float
+    lon: float
+    photo_base64: Optional[str] = None
+
+
 # ============================================
 # AUTH ENDPOINTS - KULLANICI (Vatandaş)
 # ============================================
 
-@app.post("/auth/user/register", response_model=Token)
+@app.post("/auth/user/register")
 async def register_user_endpoint(user_data: UserRegister):
     """
     Yeni vatandaş kullanıcı kaydı.
@@ -201,14 +227,30 @@ async def register_user_endpoint(user_data: UserRegister):
     - **email**: E-posta (opsiyonel)
     - **full_name**: Ad Soyad (opsiyonel)
     """
-    new_user = register_user(user_data)
-    
-    # Otomatik giriş yap
-    login_data = UserLogin(username=user_data.username, password=user_data.password)
-    return login_user(login_data)
+    try:
+        new_user = register_user(user_data)
+        
+        # Otomatik giriş yap
+        login_data = UserLogin(username=user_data.username, password=user_data.password)
+        token = login_user(login_data)
+        
+        return {
+            "success": True,
+            "message": "Kayıt işleminiz başarıyla tamamlandı! Hoş geldiniz.",
+            "user_id": new_user["id"],
+            "username": new_user["username"],
+            "token": token
+        }
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Kayıt sırasında bir hata oluştu: {str(e)}"
+        )
 
 
-@app.post("/auth/user/login", response_model=Token)
+@app.post("/auth/user/login")
 async def login_user_endpoint(login_data: UserLogin):
     """
     Vatandaş kullanıcı girişi.
@@ -219,14 +261,26 @@ async def login_user_endpoint(login_data: UserLogin):
     - **username**: Kullanıcı adı
     - **password**: Şifre
     """
-    return login_user(login_data)
+    try:
+        token = login_user(login_data)
+        return {
+            "success": True,
+            "message": "Giriş başarılı! Hoş geldiniz.",
+            "token": token
+        }
+    except HTTPException as e:
+        # Daha anlaşılır hata mesajı
+        raise HTTPException(
+            status_code=e.status_code,
+            detail="Kullanıcı adı veya şifre hatalı. Lütfen bilgilerinizi kontrol edin."
+        )
 
 
 # ============================================
 # AUTH ENDPOINTS - BELEDİYE PERSONELİ
 # ============================================
 
-@app.post("/auth/staff/login", response_model=Token)
+@app.post("/auth/staff/login")
 async def login_staff_endpoint(login_data: StaffLogin):
     """
     Belediye personeli girişi.
@@ -238,7 +292,18 @@ async def login_staff_endpoint(login_data: StaffLogin):
     - **username**: Kullanıcı adı
     - **password**: Şifre
     """
-    return login_staff(login_data)
+    try:
+        token = login_staff(login_data)
+        return {
+            "success": True,
+            "message": "Giriş başarılı! Belediye paneline yönlendiriliyorsunuz.",
+            "token": token
+        }
+    except HTTPException as e:
+        raise HTTPException(
+            status_code=e.status_code,
+            detail="Personel kullanıcı adı veya şifre hatalı. Lütfen bilgilerinizi kontrol edin."
+        )
 
 
 @app.get("/auth/me")
@@ -423,57 +488,79 @@ async def create_complaint(
     photo: Optional[UploadFile] = File(None, description="Photo file")
 ):
     """
-    Create a new complaint.
+    Yeni şikayet oluştur.
     
-    Accepts:
-        - category: Type of complaint (e.g., "boru_patlamasi", "merdiven_kirik")
-        - description: Detailed description
-        - lat, lon: Location coordinates
-        - photo: Optional photo upload
+    Kabul edilen parametreler:
+        - category: Şikayet kategorisi (örn: "boru_patlamasi", "merdiven_kirik")
+        - description: Detaylı açıklama
+        - lat, lon: Konum koordinatları
+        - photo: Fotoğraf (opsiyonel)
     
-    Returns:
-        - status: "ok" if successful
-        - id: Generated complaint ID
+    Dönen değerler:
+        - success: İşlem başarılı mı
+        - message: Kullanıcıya gösterilecek mesaj
+        - complaint_id: Şikayet numarası
     """
-    # Load existing complaints
-    complaints = get_complaints()
-    
-    # Generate new ID
-    new_id = max([c["id"] for c in complaints], default=0) + 1
-    
-    # Determine urgency
-    urgency = get_urgency(category)
-    
-    # Handle photo
-    photo_path = None
-    if photo:
-        # Save photo to disk
-        photo_filename = f"{new_id}_{photo.filename}"
-        photo_full_path = PHOTOS_DIR / photo_filename
+    try:
+        # Load existing complaints
+        complaints = get_complaints()
         
-        content = await photo.read()
-        with open(photo_full_path, "wb") as f:
-            f.write(content)
+        # Generate new ID
+        new_id = max([c["id"] for c in complaints], default=0) + 1
         
-        photo_path = str(photo_filename)
-    
-    # Create complaint object
-    new_complaint = {
-        "id": new_id,
-        "category": category,
-        "description": description,
-        "lat": lat,
-        "lon": lon,
-        "urgency": urgency,
-        "photo": photo_path,
-        "created_at": datetime.now().isoformat()
-    }
-    
-    # Append and save
-    complaints.append(new_complaint)
-    save_complaints(complaints)
-    
-    return ComplaintResponse(status="ok", id=new_id)
+        # Determine urgency
+        urgency = get_urgency(category)
+        created_at = datetime.now().isoformat()
+        
+        # Handle photo
+        photo_path = None
+        if photo:
+            # Save photo to disk
+            photo_filename = f"{new_id}_{photo.filename}"
+            photo_full_path = PHOTOS_DIR / photo_filename
+            
+            content = await photo.read()
+            with open(photo_full_path, "wb") as f:
+                f.write(content)
+            
+            photo_path = str(photo_filename)
+        
+        # Create complaint object
+        new_complaint = {
+            "id": new_id,
+            "category": category,
+            "description": description,
+            "lat": lat,
+            "lon": lon,
+            "urgency": urgency,
+            "photo": photo_path,
+            "created_at": created_at
+        }
+        
+        # Append and save
+        complaints.append(new_complaint)
+        save_complaints(complaints)
+        
+        # Aciliyet mesajı
+        urgency_messages = {
+            "red": "Acil durum olarak kaydedildi. En kısa sürede müdahale edilecektir.",
+            "yellow": "Orta öncelikli olarak kaydedildi. En kısa sürede değerlendirilecektir.",
+            "green": "Normal öncelikli olarak kaydedildi. Sırasıyla değerlendirilecektir."
+        }
+        
+        return ComplaintResponse(
+            success=True,
+            message=f"Şikayetiniz başarıyla alınmıştır! Şikayet numaranız: #{new_id}. {urgency_messages.get(urgency, '')}",
+            complaint_id=new_id,
+            category=category,
+            urgency=urgency,
+            created_at=created_at
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Şikayet oluşturulurken bir hata oluştu: {str(e)}"
+        )
 
 
 @app.post("/complaints/base64", response_model=ComplaintResponse)
@@ -485,60 +572,163 @@ async def create_complaint_base64(
     photo_base64: Optional[str] = Form(None, description="Base64 encoded photo")
 ):
     """
-    Create a new complaint with base64 encoded photo.
-    Alternative endpoint for clients that prefer base64.
+    Base64 formatında fotoğraf ile şikayet oluştur.
+    Mobil uygulamalar için alternatif endpoint.
     """
-    # Load existing complaints
-    complaints = get_complaints()
+    try:
+        # Load existing complaints
+        complaints = get_complaints()
+        
+        # Generate new ID
+        new_id = max([c["id"] for c in complaints], default=0) + 1
+        
+        # Determine urgency
+        urgency = get_urgency(category)
+        created_at = datetime.now().isoformat()
+        
+        # Handle base64 photo
+        photo_path = None
+        if photo_base64:
+            try:
+                # Decode and save
+                photo_data = base64.b64decode(photo_base64)
+                photo_filename = f"{new_id}_photo.jpg"
+                photo_full_path = PHOTOS_DIR / photo_filename
+                
+                with open(photo_full_path, "wb") as f:
+                    f.write(photo_data)
+                
+                photo_path = str(photo_filename)
+            except Exception as e:
+                raise HTTPException(status_code=400, detail=f"Fotoğraf yüklenirken hata oluştu: {str(e)}")
+        
+        # Create complaint object
+        new_complaint = {
+            "id": new_id,
+            "category": category,
+            "description": description,
+            "lat": lat,
+            "lon": lon,
+            "urgency": urgency,
+            "photo": photo_path,
+            "created_at": created_at
+        }
+        
+        # Append and save
+        complaints.append(new_complaint)
+        save_complaints(complaints)
+        
+        # Aciliyet mesajı
+        urgency_messages = {
+            "red": "Acil durum olarak kaydedildi. En kısa sürede müdahale edilecektir.",
+            "yellow": "Orta öncelikli olarak kaydedildi. En kısa sürede değerlendirilecektir.",
+            "green": "Normal öncelikli olarak kaydedildi. Sırasıyla değerlendirilecektir."
+        }
+        
+        return ComplaintResponse(
+            success=True,
+            message=f"Şikayetiniz başarıyla alınmıştır! Şikayet numaranız: #{new_id}. {urgency_messages.get(urgency, '')}",
+            complaint_id=new_id,
+            category=category,
+            urgency=urgency,
+            created_at=created_at
+        )
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Şikayet oluşturulurken bir hata oluştu: {str(e)}"
+        )
+
+
+@app.post("/complaints/json", response_model=ComplaintResponse)
+async def create_complaint_json(complaint_data: ComplaintCreate):
+    """
+    JSON body ile şikayet oluştur.
+    Frontend uygulamaları için önerilen endpoint.
     
-    # Generate new ID
-    new_id = max([c["id"] for c in complaints], default=0) + 1
-    
-    # Determine urgency
-    urgency = get_urgency(category)
-    
-    # Handle base64 photo
-    photo_path = None
-    if photo_base64:
-        try:
-            # Decode and save
-            photo_data = base64.b64decode(photo_base64)
-            photo_filename = f"{new_id}_photo.jpg"
-            photo_full_path = PHOTOS_DIR / photo_filename
-            
-            with open(photo_full_path, "wb") as f:
-                f.write(photo_data)
-            
-            photo_path = str(photo_filename)
-        except Exception as e:
-            raise HTTPException(status_code=400, detail=f"Invalid base64 photo: {str(e)}")
-    
-    # Create complaint object
-    new_complaint = {
-        "id": new_id,
-        "category": category,
-        "description": description,
-        "lat": lat,
-        "lon": lon,
-        "urgency": urgency,
-        "photo": photo_path,
-        "created_at": datetime.now().isoformat()
+    Body:
+    {
+        "category": "boru_patlamasi",
+        "description": "Açıklama...",
+        "lat": 39.9208,
+        "lon": 32.8541,
+        "photo_base64": "..." (opsiyonel)
     }
-    
-    # Append and save
-    complaints.append(new_complaint)
-    save_complaints(complaints)
-    
-    return ComplaintResponse(status="ok", id=new_id)
+    """
+    try:
+        # Load existing complaints
+        complaints = get_complaints()
+        
+        # Generate new ID
+        new_id = max([c["id"] for c in complaints], default=0) + 1
+        
+        # Determine urgency
+        urgency = get_urgency(complaint_data.category)
+        created_at = datetime.now().isoformat()
+        
+        # Handle base64 photo
+        photo_path = None
+        if complaint_data.photo_base64:
+            try:
+                photo_data = base64.b64decode(complaint_data.photo_base64)
+                photo_filename = f"{new_id}_photo.jpg"
+                photo_full_path = PHOTOS_DIR / photo_filename
+                
+                with open(photo_full_path, "wb") as f:
+                    f.write(photo_data)
+                
+                photo_path = str(photo_filename)
+            except Exception as e:
+                raise HTTPException(status_code=400, detail=f"Fotoğraf yüklenirken hata oluştu: {str(e)}")
+        
+        # Create complaint object
+        new_complaint = {
+            "id": new_id,
+            "category": complaint_data.category,
+            "description": complaint_data.description,
+            "lat": complaint_data.lat,
+            "lon": complaint_data.lon,
+            "urgency": urgency,
+            "photo": photo_path,
+            "created_at": created_at
+        }
+        
+        # Append and save
+        complaints.append(new_complaint)
+        save_complaints(complaints)
+        
+        # Aciliyet mesajı
+        urgency_messages = {
+            "red": "Acil durum olarak kaydedildi. En kısa sürede müdahale edilecektir.",
+            "yellow": "Orta öncelikli olarak kaydedildi. En kısa sürede değerlendirilecektir.",
+            "green": "Normal öncelikli olarak kaydedildi. Sırasıyla değerlendirilecektir."
+        }
+        
+        return ComplaintResponse(
+            success=True,
+            message=f"Şikayetiniz başarıyla alınmıştır! Şikayet numaranız: #{new_id}. {urgency_messages.get(urgency, '')}",
+            complaint_id=new_id,
+            category=complaint_data.category,
+            urgency=urgency,
+            created_at=created_at
+        )
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Şikayet oluşturulurken bir hata oluştu: {str(e)}"
+        )
 
 
 @app.get("/complaints", response_model=list[Complaint])
 async def list_complaints():
     """
-    Get all complaints.
+    Tüm şikayetleri listele.
     
-    Returns list of all complaints with their details.
-    Used by Municipality Panel to view and manage complaints.
+    Belediye paneli için şikayet listesi.
     """
     complaints = get_complaints()
     return complaints

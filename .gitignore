@@ -1,4 +1,13 @@
-venv/
+echo "venv/
 __pycache__/
 *.pyc
+.DS_Store
+photos/
+*.json
+!complaints.json
+data/*.json
+!data/bus_stops_list.json
+!data/grid_access_only.geojson
+!data/grid_nearest_3stops.json
+!data/grid_slope_score.json" > .gitignore
 
