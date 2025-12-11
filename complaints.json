@@ -7,7 +7,11 @@
     "lon": 32.8541,
     "urgency": "red",
     "photo": null,
-    "created_at": "2025-12-08T09:15:00.000000"
+    "created_at": "2025-12-08T09:15:00.000000",
+    "status": "inceleniyor",
+    "feedback": "Şikayetiniz incelemeye alınmıştır. Ekiplerimiz en kısa sürede müdahale edecektir.",
+    "feedback_at": "2025-12-11T10:42:41.314060",
+    "feedback_by": "belediye_admin"
   },
   {
     "id": 2,
@@ -17,7 +21,11 @@
     "lon": 32.8623,
     "urgency": "red",
     "photo": null,
-    "created_at": "2025-12-08T11:30:00.000000"
+    "created_at": "2025-12-08T11:30:00.000000",
+    "status": "inceleniyor",
+    "feedback": "Şikayetiniz incelemeye alınmıştır. Ekiplerimiz konuyla ilgilenmektedir.",
+    "feedback_at": "2025-12-11T10:47:59.115901",
+    "feedback_by": "belediye_admin"
   },
   {
     "id": 3,
@@ -27,7 +35,11 @@
     "lon": 32.8487,
     "urgency": "red",
     "photo": null,
-    "created_at": "2025-12-07T22:45:00.000000"
+    "created_at": "2025-12-07T22:45:00.000000",
+    "status": "cozuldu",
+    "feedback": "Şikayetiniz çözümlenmiştir. İlginiz için teşekkür ederiz.",
+    "feedback_at": "2025-12-11T10:47:59.147818",
+    "feedback_by": "belediye_admin"
   },
   {
     "id": 4,
@@ -37,7 +49,11 @@
     "lon": 32.8712,
     "urgency": "yellow",
     "photo": null,
-    "created_at": "2025-12-07T14:20:00.000000"
+    "created_at": "2025-12-07T14:20:00.000000",
+    "status": "cozuldu",
+    "feedback": "Merdiven onarımı tamamlandı, güvenle kullanabilirsiniz.",
+    "feedback_at": "2025-12-11T10:47:59.177441",
+    "feedback_by": "belediye_admin"
   },
   {
     "id": 5,

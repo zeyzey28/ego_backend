@@ -13,7 +13,9 @@ from typing import Optional
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
+from pydantic import BaseModel, Field
 
 from geo import (
     calculate_walking_duration,
@@ -71,6 +73,9 @@ PHOTOS_DIR = Path(__file__).parent / "photos"
 
 # Ensure directories exist
 PHOTOS_DIR.mkdir(parents=True, exist_ok=True)
+
+# Mount photos directory for static file serving
+app.mount("/photos", StaticFiles(directory=str(PHOTOS_DIR)), name="photos")
 
 # Category to urgency mapping
 URGENCY_MAPPING = {
@@ -200,7 +205,14 @@ class Complaint(BaseModel):
     lon: float
     urgency: str
     photo: Optional[str] = None
+    photo_url: Optional[str] = None  # Fotoğraf URL'i
     created_at: str
+    # Geri bildirim alanları
+    status: str = "beklemede"  # beklemede, inceleniyor, cozuldu, reddedildi
+    feedback: Optional[str] = None  # Belediye geri bildirimi
+    feedback_at: Optional[str] = None  # Geri bildirim tarihi
+    feedback_by: Optional[str] = None  # Geri bildirim veren personel
+    user_id: Optional[int] = None  # Şikayeti oluşturan kullanıcı
 
 
 class ComplaintCreate(BaseModel):
@@ -210,6 +222,33 @@ class ComplaintCreate(BaseModel):
     lat: float
     lon: float
     photo_base64: Optional[str] = None
+
+
+class FeedbackCreate(BaseModel):
+    """Belediye geri bildirim modeli"""
+    status: str  # beklemede, inceleniyor, cozuldu, reddedildi
+    feedback: Optional[str] = None  # Opsiyonel - yazılmazsa otomatik mesaj atanır
+
+
+# Otomatik geri bildirim mesajları
+AUTO_FEEDBACK_MESSAGES = {
+    "beklemede": "Şikayetiniz alınmıştır. En kısa sürede değerlendirilecektir.",
+    "inceleniyor": "Şikayetiniz incelemeye alınmıştır. Ekiplerimiz konuyla ilgilenmektedir.",
+    "cozuldu": "Şikayetiniz çözümlenmiştir. İlginiz için teşekkür ederiz.",
+    "reddedildi": "Şikayetiniz değerlendirilmiş ancak işlem yapılamamıştır. Detaylı bilgi için belediye ile iletişime geçebilirsiniz."
+}
+
+
+class UserComplaint(BaseModel):
+    """Kullanıcının şikayetleri için model"""
+    id: int
+    category: str
+    description: str
+    urgency: str
+    status: str
+    created_at: str
+    feedback: Optional[str] = None
+    feedback_at: Optional[str] = None
 
 
 # ============================================
@@ -502,45 +541,45 @@ async def create_complaint(
         - complaint_id: Şikayet numarası
     """
     try:
-        # Load existing complaints
-        complaints = get_complaints()
-        
-        # Generate new ID
-        new_id = max([c["id"] for c in complaints], default=0) + 1
-        
-        # Determine urgency
-        urgency = get_urgency(category)
+    # Load existing complaints
+    complaints = get_complaints()
+    
+    # Generate new ID
+    new_id = max([c["id"] for c in complaints], default=0) + 1
+    
+    # Determine urgency
+    urgency = get_urgency(category)
         created_at = datetime.now().isoformat()
+    
+    # Handle photo
+    photo_path = None
+    if photo:
+        # Save photo to disk
+        photo_filename = f"{new_id}_{photo.filename}"
+        photo_full_path = PHOTOS_DIR / photo_filename
         
-        # Handle photo
-        photo_path = None
-        if photo:
-            # Save photo to disk
-            photo_filename = f"{new_id}_{photo.filename}"
-            photo_full_path = PHOTOS_DIR / photo_filename
-            
-            content = await photo.read()
-            with open(photo_full_path, "wb") as f:
-                f.write(content)
-            
-            photo_path = str(photo_filename)
+        content = await photo.read()
+        with open(photo_full_path, "wb") as f:
+            f.write(content)
         
-        # Create complaint object
-        new_complaint = {
-            "id": new_id,
-            "category": category,
-            "description": description,
-            "lat": lat,
-            "lon": lon,
-            "urgency": urgency,
-            "photo": photo_path,
+        photo_path = str(photo_filename)
+    
+    # Create complaint object
+    new_complaint = {
+        "id": new_id,
+        "category": category,
+        "description": description,
+        "lat": lat,
+        "lon": lon,
+        "urgency": urgency,
+        "photo": photo_path,
             "created_at": created_at
-        }
-        
-        # Append and save
-        complaints.append(new_complaint)
-        save_complaints(complaints)
-        
+    }
+    
+    # Append and save
+    complaints.append(new_complaint)
+    save_complaints(complaints)
+    
         # Aciliyet mesajı
         urgency_messages = {
             "red": "Acil durum olarak kaydedildi. En kısa sürede müdahale edilecektir.",
@@ -576,48 +615,48 @@ async def create_complaint_base64(
     Mobil uygulamalar için alternatif endpoint.
     """
     try:
-        # Load existing complaints
-        complaints = get_complaints()
-        
-        # Generate new ID
-        new_id = max([c["id"] for c in complaints], default=0) + 1
-        
-        # Determine urgency
-        urgency = get_urgency(category)
+    # Load existing complaints
+    complaints = get_complaints()
+    
+    # Generate new ID
+    new_id = max([c["id"] for c in complaints], default=0) + 1
+    
+    # Determine urgency
+    urgency = get_urgency(category)
         created_at = datetime.now().isoformat()
-        
-        # Handle base64 photo
-        photo_path = None
-        if photo_base64:
-            try:
-                # Decode and save
-                photo_data = base64.b64decode(photo_base64)
-                photo_filename = f"{new_id}_photo.jpg"
-                photo_full_path = PHOTOS_DIR / photo_filename
-                
-                with open(photo_full_path, "wb") as f:
-                    f.write(photo_data)
-                
-                photo_path = str(photo_filename)
-            except Exception as e:
+    
+    # Handle base64 photo
+    photo_path = None
+    if photo_base64:
+        try:
+            # Decode and save
+            photo_data = base64.b64decode(photo_base64)
+            photo_filename = f"{new_id}_photo.jpg"
+            photo_full_path = PHOTOS_DIR / photo_filename
+            
+            with open(photo_full_path, "wb") as f:
+                f.write(photo_data)
+            
+            photo_path = str(photo_filename)
+        except Exception as e:
                 raise HTTPException(status_code=400, detail=f"Fotoğraf yüklenirken hata oluştu: {str(e)}")
-        
-        # Create complaint object
-        new_complaint = {
-            "id": new_id,
-            "category": category,
-            "description": description,
-            "lat": lat,
-            "lon": lon,
-            "urgency": urgency,
-            "photo": photo_path,
+    
+    # Create complaint object
+    new_complaint = {
+        "id": new_id,
+        "category": category,
+        "description": description,
+        "lat": lat,
+        "lon": lon,
+        "urgency": urgency,
+        "photo": photo_path,
             "created_at": created_at
-        }
-        
-        # Append and save
-        complaints.append(new_complaint)
-        save_complaints(complaints)
-        
+    }
+    
+    # Append and save
+    complaints.append(new_complaint)
+    save_complaints(complaints)
+    
         # Aciliyet mesajı
         urgency_messages = {
             "red": "Acil durum olarak kaydedildi. En kısa sürede müdahale edilecektir.",
@@ -659,7 +698,7 @@ async def create_complaint_json(complaint_data: ComplaintCreate):
     """
     try:
         # Load existing complaints
-        complaints = get_complaints()
+    complaints = get_complaints()
         
         # Generate new ID
         new_id = max([c["id"] for c in complaints], default=0) + 1
@@ -692,7 +731,12 @@ async def create_complaint_json(complaint_data: ComplaintCreate):
             "lon": complaint_data.lon,
             "urgency": urgency,
             "photo": photo_path,
-            "created_at": created_at
+            "created_at": created_at,
+            "status": "beklemede",
+            "feedback": None,
+            "feedback_at": None,
+            "feedback_by": None,
+            "user_id": None  # Anonim şikayet
         }
         
         # Append and save
@@ -723,27 +767,302 @@ async def create_complaint_json(complaint_data: ComplaintCreate):
         )
 
 
-@app.get("/complaints", response_model=list[Complaint])
+@app.get("/complaints")
 async def list_complaints():
     """
     Tüm şikayetleri listele.
-    
     Belediye paneli için şikayet listesi.
+    Fotoğraf URL'leri ile birlikte döner.
     """
     complaints = get_complaints()
+    
+    # Fotoğraf URL'lerini ekle
+    for complaint in complaints:
+        if complaint.get("photo"):
+            complaint["photo_url"] = f"/photos/{complaint['photo']}"
+        else:
+            complaint["photo_url"] = None
+        
+        # Eksik alanları varsayılan değerlerle doldur
+        if "status" not in complaint:
+            complaint["status"] = "beklemede"
+        if "feedback" not in complaint:
+            complaint["feedback"] = None
+        if "feedback_at" not in complaint:
+            complaint["feedback_at"] = None
+        if "feedback_by" not in complaint:
+            complaint["feedback_by"] = None
+        if "user_id" not in complaint:
+            complaint["user_id"] = None
+    
     return complaints
 
 
-@app.get("/complaints/{complaint_id}", response_model=Complaint)
+@app.get("/complaints/{complaint_id}")
 async def get_complaint(complaint_id: int):
-    """Get a specific complaint by ID."""
+    """Belirli bir şikayeti getir."""
     complaints = get_complaints()
     
     for complaint in complaints:
         if complaint["id"] == complaint_id:
+            # Fotoğraf URL'i ekle
+            if complaint.get("photo"):
+                complaint["photo_url"] = f"/photos/{complaint['photo']}"
+            else:
+                complaint["photo_url"] = None
+            
+            # Eksik alanları doldur
+            if "status" not in complaint:
+                complaint["status"] = "beklemede"
+            if "feedback" not in complaint:
+                complaint["feedback"] = None
+            
             return complaint
     
-    raise HTTPException(status_code=404, detail="Complaint not found")
+    raise HTTPException(status_code=404, detail="Şikayet bulunamadı")
+
+
+# ============================================
+# GERİ BİLDİRİM ENDPOINTLERİ (Belediye Paneli)
+# ============================================
+
+@app.put("/complaints/{complaint_id}/feedback")
+async def add_feedback(
+    complaint_id: int,
+    feedback_data: FeedbackCreate,
+    current_user: TokenData = Depends(get_current_staff)
+):
+    """
+    Şikayete geri bildirim ekle.
+    Sadece belediye personeli yapabilir.
+    
+    Status değerleri:
+    - beklemede: Henüz incelenmedi
+    - inceleniyor: İnceleme sürecinde
+    - cozuldu: Çözüldü
+    - reddedildi: Reddedildi
+    
+    Feedback opsiyoneldir:
+    - Yazılmazsa status'a göre otomatik mesaj atanır
+    - Yazılırsa özel mesaj kullanılır
+    """
+    # Status kontrolü
+    valid_statuses = ["beklemede", "inceleniyor", "cozuldu", "reddedildi"]
+    if feedback_data.status not in valid_statuses:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Geçersiz durum. Geçerli değerler: {', '.join(valid_statuses)}"
+        )
+    
+    complaints = get_complaints()
+    
+    for complaint in complaints:
+        if complaint["id"] == complaint_id:
+            complaint["status"] = feedback_data.status
+            
+            # Feedback yazılmadıysa otomatik mesaj ata
+            if feedback_data.feedback:
+                complaint["feedback"] = feedback_data.feedback
+            else:
+                complaint["feedback"] = AUTO_FEEDBACK_MESSAGES.get(
+                    feedback_data.status, 
+                    "Şikayetiniz güncellendi."
+                )
+            
+            complaint["feedback_at"] = datetime.now().isoformat()
+            complaint["feedback_by"] = current_user.username
+            
+            save_complaints(complaints)
+            
+            return {
+                "success": True,
+                "message": "Geri bildirim başarıyla eklendi.",
+                "complaint_id": complaint_id,
+                "status": feedback_data.status,
+                "feedback": complaint["feedback"]
+            }
+    
+    raise HTTPException(status_code=404, detail="Şikayet bulunamadı")
+
+
+@app.put("/complaints/{complaint_id}/status")
+async def update_status_only(
+    complaint_id: int,
+    status: str = Query(..., description="Yeni durum"),
+    current_user: TokenData = Depends(get_current_staff)
+):
+    """
+    Sadece durum güncelle (otomatik mesaj ile).
+    Tek tıkla durum değiştirmek için kullanılır.
+    
+    Örnek: PUT /complaints/1/status?status=cozuldu
+    """
+    valid_statuses = ["beklemede", "inceleniyor", "cozuldu", "reddedildi"]
+    if status not in valid_statuses:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Geçersiz durum. Geçerli değerler: {', '.join(valid_statuses)}"
+        )
+    
+    complaints = get_complaints()
+    
+    for complaint in complaints:
+        if complaint["id"] == complaint_id:
+            complaint["status"] = status
+            complaint["feedback"] = AUTO_FEEDBACK_MESSAGES.get(status, "Şikayetiniz güncellendi.")
+            complaint["feedback_at"] = datetime.now().isoformat()
+            complaint["feedback_by"] = current_user.username
+            
+            save_complaints(complaints)
+            
+            return {
+                "success": True,
+                "message": f"Durum '{status}' olarak güncellendi.",
+                "complaint_id": complaint_id,
+                "status": status,
+                "feedback": complaint["feedback"]
+            }
+    
+    raise HTTPException(status_code=404, detail="Şikayet bulunamadı")
+
+
+@app.get("/complaints/status/{status}")
+async def get_complaints_by_status(status: str):
+    """
+    Duruma göre şikayetleri filtrele.
+    
+    Status: beklemede, inceleniyor, cozuldu, reddedildi
+    """
+    valid_statuses = ["beklemede", "inceleniyor", "cozuldu", "reddedildi"]
+    if status not in valid_statuses:
+        raise HTTPException(
+            status_code=400, 
+            detail=f"Geçersiz durum. Geçerli değerler: {', '.join(valid_statuses)}"
+        )
+    
+    complaints = get_complaints()
+    filtered = [c for c in complaints if c.get("status", "beklemede") == status]
+    
+    # Fotoğraf URL'lerini ekle
+    for complaint in filtered:
+        if complaint.get("photo"):
+            complaint["photo_url"] = f"/photos/{complaint['photo']}"
+    
+    return filtered
+
+
+# ============================================
+# KULLANICI ŞİKAYETLERİM ENDPOINTİ
+# ============================================
+
+@app.get("/my-complaints")
+async def get_my_complaints(current_user: TokenData = Depends(get_current_user)):
+    """
+    Kullanıcının kendi şikayetlerini listele.
+    Geri bildirimlerle birlikte döner.
+    """
+    complaints = get_complaints()
+    users = get_users()
+    
+    # Kullanıcı ID'sini bul
+    user_id = None
+    for user in users:
+        if user["username"] == current_user.username:
+            user_id = user["id"]
+            break
+    
+    if user_id is None:
+        return []
+    
+    # Kullanıcının şikayetlerini filtrele
+    my_complaints = [c for c in complaints if c.get("user_id") == user_id]
+    
+    # Fotoğraf URL'lerini ekle
+    for complaint in my_complaints:
+        if complaint.get("photo"):
+            complaint["photo_url"] = f"/photos/{complaint['photo']}"
+        if "status" not in complaint:
+            complaint["status"] = "beklemede"
+    
+    return my_complaints
+
+
+@app.post("/complaints/json/auth")
+async def create_complaint_with_auth(
+    complaint_data: ComplaintCreate,
+    current_user: TokenData = Depends(get_current_user)
+):
+    """
+    Giriş yapmış kullanıcı için şikayet oluştur.
+    Kullanıcı ID'si otomatik eklenir.
+    """
+    try:
+        complaints = get_complaints()
+        users = get_users()
+        
+        # Kullanıcı ID'sini bul
+        user_id = None
+        for user in users:
+            if user["username"] == current_user.username:
+                user_id = user["id"]
+                break
+        
+        new_id = max([c["id"] for c in complaints], default=0) + 1
+        urgency = get_urgency(complaint_data.category)
+        created_at = datetime.now().isoformat()
+        
+        # Fotoğraf işleme
+        photo_path = None
+        if complaint_data.photo_base64:
+            try:
+                photo_data = base64.b64decode(complaint_data.photo_base64)
+                photo_filename = f"{new_id}_photo.jpg"
+                photo_full_path = PHOTOS_DIR / photo_filename
+                
+                with open(photo_full_path, "wb") as f:
+                    f.write(photo_data)
+                
+                photo_path = str(photo_filename)
+            except Exception as e:
+                raise HTTPException(status_code=400, detail=f"Fotoğraf yüklenirken hata: {str(e)}")
+        
+        new_complaint = {
+            "id": new_id,
+            "category": complaint_data.category,
+            "description": complaint_data.description,
+            "lat": complaint_data.lat,
+            "lon": complaint_data.lon,
+            "urgency": urgency,
+            "photo": photo_path,
+            "created_at": created_at,
+            "status": "beklemede",
+            "feedback": None,
+            "feedback_at": None,
+            "feedback_by": None,
+            "user_id": user_id
+        }
+        
+        complaints.append(new_complaint)
+        save_complaints(complaints)
+        
+        urgency_messages = {
+            "red": "Acil durum olarak kaydedildi. En kısa sürede müdahale edilecektir.",
+            "yellow": "Orta öncelikli olarak kaydedildi. En kısa sürede değerlendirilecektir.",
+            "green": "Normal öncelikli olarak kaydedildi. Sırasıyla değerlendirilecektir."
+        }
+        
+        return {
+            "success": True,
+            "message": f"Şikayetiniz başarıyla alınmıştır! Şikayet numaranız: #{new_id}. {urgency_messages.get(urgency, '')}",
+            "complaint_id": new_id,
+            "category": complaint_data.category,
+            "urgency": urgency,
+            "created_at": created_at
+        }
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Şikayet oluşturulurken hata: {str(e)}")
 
 
 # ============================================
@@ -979,6 +1298,190 @@ async def get_urgent_complaints():
         "count": len(urgent),
         "complaints": urgent
     }
+
+
+# ============================================
+# DURAK ENDPOINTLERİ
+# ============================================
+
+# Varsayılan bölge sınırları (Ankara merkez - küçük bir alan)
+DEFAULT_BOUNDS = {
+    "min_lat": 39.90,
+    "max_lat": 39.95,
+    "min_lon": 32.82,
+    "max_lon": 32.90
+}
+
+
+@app.get("/bus-stops")
+async def get_all_bus_stops(
+    min_lat: Optional[float] = Query(None, description="Minimum enlem"),
+    max_lat: Optional[float] = Query(None, description="Maksimum enlem"),
+    min_lon: Optional[float] = Query(None, description="Minimum boylam"),
+    max_lon: Optional[float] = Query(None, description="Maksimum boylam"),
+    limit: int = Query(100, description="Maksimum durak sayısı", ge=1, le=500)
+):
+    """
+    Tüm durakları veya belirli bir bölgedeki durakları listele.
+    
+    Parametresiz çağrılırsa varsayılan bölgedeki durakları döner.
+    Bölge parametreleri verilirse o bölgedeki durakları döner.
+    
+    Örnek: /bus-stops?min_lat=39.90&max_lat=39.95&min_lon=32.82&max_lon=32.90
+    """
+    bus_stops = get_bus_stops()
+    stops_list = list(bus_stops.values())
+    
+    # Bölge filtresi uygula
+    if min_lat is None:
+        min_lat = DEFAULT_BOUNDS["min_lat"]
+    if max_lat is None:
+        max_lat = DEFAULT_BOUNDS["max_lat"]
+    if min_lon is None:
+        min_lon = DEFAULT_BOUNDS["min_lon"]
+    if max_lon is None:
+        max_lon = DEFAULT_BOUNDS["max_lon"]
+    
+    filtered_stops = [
+        stop for stop in stops_list
+        if min_lat <= stop["lat"] <= max_lat and min_lon <= stop["lon"] <= max_lon
+    ]
+    
+    # Limit uygula
+    filtered_stops = filtered_stops[:limit]
+    
+    return {
+        "total": len(filtered_stops),
+        "bounds": {
+            "min_lat": min_lat,
+            "max_lat": max_lat,
+            "min_lon": min_lon,
+            "max_lon": max_lon
+        },
+        "stops": filtered_stops
+    }
+
+
+@app.get("/bus-stops/nearby")
+async def get_nearby_bus_stops(
+    lat: float = Query(..., description="Merkez enlem"),
+    lon: float = Query(..., description="Merkez boylam"),
+    radius_km: float = Query(1.0, description="Yarıçap (km)", ge=0.1, le=5.0),
+    limit: int = Query(20, description="Maksimum durak sayısı", ge=1, le=100)
+):
+    """
+    Belirli bir noktanın çevresindeki durakları getir.
+    
+    Örnek: /bus-stops/nearby?lat=39.92&lon=32.85&radius_km=0.5
+    """
+    import math
+    
+    bus_stops = get_bus_stops()
+    stops_list = list(bus_stops.values())
+    
+    # Haversine mesafe hesaplama
+    def haversine(lat1, lon1, lat2, lon2):
+        R = 6371  # Dünya yarıçapı (km)
+        dlat = math.radians(lat2 - lat1)
+        dlon = math.radians(lon2 - lon1)
+        a = math.sin(dlat/2)**2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon/2)**2
+        c = 2 * math.asin(math.sqrt(a))
+        return R * c
+    
+    # Mesafeyi hesapla ve filtrele
+    nearby_stops = []
+    for stop in stops_list:
+        distance = haversine(lat, lon, stop["lat"], stop["lon"])
+        if distance <= radius_km:
+            stop_with_distance = stop.copy()
+            stop_with_distance["distance_km"] = round(distance, 3)
+            stop_with_distance["distance_m"] = round(distance * 1000, 1)
+            nearby_stops.append(stop_with_distance)
+    
+    # Mesafeye göre sırala
+    nearby_stops.sort(key=lambda x: x["distance_km"])
+    
+    # Limit uygula
+    nearby_stops = nearby_stops[:limit]
+    
+    return {
+        "center": {"lat": lat, "lon": lon},
+        "radius_km": radius_km,
+        "total": len(nearby_stops),
+        "stops": nearby_stops
+    }
+
+
+@app.get("/bus-stops/bounds")
+async def get_bus_stops_bounds():
+    """
+    Tüm durakların kapsadığı alanın sınırlarını döner.
+    Frontend harita başlangıç konumu için kullanılabilir.
+    """
+    bus_stops = get_bus_stops()
+    stops_list = list(bus_stops.values())
+    
+    if not stops_list:
+        return {"error": "Durak verisi bulunamadı"}
+    
+    lats = [s["lat"] for s in stops_list]
+    lons = [s["lon"] for s in stops_list]
+    
+    return {
+        "total_stops": len(stops_list),
+        "bounds": {
+            "min_lat": min(lats),
+            "max_lat": max(lats),
+            "min_lon": min(lons),
+            "max_lon": max(lons)
+        },
+        "center": {
+            "lat": (min(lats) + max(lats)) / 2,
+            "lon": (min(lons) + max(lons)) / 2
+        },
+        "default_bounds": DEFAULT_BOUNDS
+    }
+
+
+# ============================================
+# FOTOĞRAF ENDPOINTİ
+# ============================================
+
+@app.get("/photo/{filename}")
+async def get_photo(filename: str):
+    """
+    Şikayet fotoğrafını getir.
+    
+    Örnek: /photo/51_photo.jpg
+    """
+    photo_path = PHOTOS_DIR / filename
+    
+    if not photo_path.exists():
+        raise HTTPException(status_code=404, detail="Fotoğraf bulunamadı")
+    
+    return FileResponse(
+        path=str(photo_path),
+        media_type="image/jpeg",
+        filename=filename
+    )
+
+
+# ============================================
+# DURUM SABİTLERİ
+# ============================================
+
+@app.get("/complaint-statuses")
+async def get_complaint_statuses():
+    """
+    Şikayet durumlarını listele.
+    Frontend'de dropdown için kullanılabilir.
+    """
+    return [
+        {"value": "beklemede", "label": "Beklemede", "color": "gray"},
+        {"value": "inceleniyor", "label": "İnceleniyor", "color": "blue"},
+        {"value": "cozuldu", "label": "Çözüldü", "color": "green"},
+        {"value": "reddedildi", "label": "Reddedildi", "color": "red"}
+    ]
 
 
 # ============================================
